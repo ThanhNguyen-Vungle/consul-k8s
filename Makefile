@@ -25,7 +25,7 @@ bats-tests: ## Run Helm chart bats tests.
 # ===========> Control Plane Targets
 
 control-plane-dev: ## Build consul-k8s-control-plane binary.
-	@$(SHELL) $(CURDIR)/control-plane/build-support/scripts/build-local.sh -o linux -a amd64
+	@$(SHELL) $(CURDIR)/control-plane/build-support/scripts/build-local.sh -o linux -a arm64
 
 control-plane-dev-docker: ## Build consul-k8s-control-plane dev Docker image.
 	@$(SHELL) $(CURDIR)/control-plane/build-support/scripts/build-local.sh -o linux -a $(GOARCH)
