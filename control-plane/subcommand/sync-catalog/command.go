@@ -7,6 +7,10 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"k8s.io/apimachinery/pkg/util/uuid"
+	"k8s.io/client-go/tools/leaderelection"
+	"k8s.io/client-go/tools/leaderelection/resourcelock"
+	componentbaseconfig "k8s.io/component-base/config"
 	"net/http"
 	"os"
 	"os/signal"
@@ -280,7 +284,57 @@ func (c *Command) Run(args []string) int {
 			ConsulK8STag:            c.flagConsulK8STag,
 			ConsulNodeName:          c.flagConsulNodeName,
 		}
-		go syncer.Run(ctx)
+
+		var id string
+
+		if hostname, err := os.Hostname(); err != nil {
+			// on errors, make sure we're unique
+			id = string(uuid.NewUUID())
+		} else {
+			// add a unique identifier so that two processes on the same host don't accidentally both become active
+			id = hostname + "_" + string(uuid.NewUUID())
+		}
+
+		defaultLEConfig := defaultLeaderElectionConfiguration()
+
+		lock, err := resourcelock.New(
+			defaultLEConfig.ResourceLock,
+			defaultLEConfig.ResourceNamespace,
+			defaultLEConfig.ResourceName,
+			c.clientset.CoreV1(),
+			c.clientset.CoordinationV1(),
+			resourcelock.ResourceLockConfig{
+				Identity: id,
+			},
+		)
+		if err != nil {
+			c.UI.Error(fmt.Sprintf("Unable to generate lock: %s", err))
+			return 1
+		}
+
+		go leaderelection.RunOrDie(ctx, leaderelection.LeaderElectionConfig{
+			Lock:            lock,
+			ReleaseOnCancel: false,
+			LeaseDuration:   defaultLeaseDuration,
+			RenewDeadline:   defaultRenewDeadline,
+			RetryPeriod:     defaultRetryPeriod,
+			Callbacks: leaderelection.LeaderCallbacks{
+				OnStartedLeading: func(ctx context.Context) {
+					c.logger.Info("Started leading with unique lease holder id: %s", id)
+					go syncer.Run(ctx)
+				},
+				OnStoppedLeading: func() {
+					c.logger.Info("Stopped leading with unique lease holder id: %s", id)
+				},
+				OnNewLeader: func(identity string) {
+					// Just got the lock
+					if identity == id {
+						return
+					}
+					c.logger.Info("New leader elected with with unique lease holder id: %v", identity)
+				},
+			},
+		})
 
 		// Build the controller and start it
 		ctl := &controller.Controller{
@@ -418,6 +472,17 @@ func (c *Command) sendSignal(sig os.Signal) {
 	c.sigCh <- sig
 }
 
+func defaultLeaderElectionConfiguration() componentbaseconfig.LeaderElectionConfiguration {
+	return componentbaseconfig.LeaderElectionConfiguration{
+		LeaderElect:   false,
+		LeaseDuration: metav1.Duration{Duration: defaultLeaseDuration},
+		RenewDeadline: metav1.Duration{Duration: defaultRenewDeadline},
+		RetryPeriod:   metav1.Duration{Duration: defaultRetryPeriod},
+		ResourceLock:  resourcelock.LeasesResourceLock,
+		ResourceName:  "consul-catalog-sync-lock",
+	}
+}
+
 func (c *Command) validateFlags() error {
 	// For the Consul node name to be discoverable via DNS, it must contain only
 	// dashes and alphanumeric characters. Length is also constrained.
@@ -440,6 +505,12 @@ func (c *Command) validateFlags() error {
 
 	return nil
 }
+
+const (
+	defaultLeaseDuration = 15 * time.Second
+	defaultRenewDeadline = 10 * time.Second
+	defaultRetryPeriod   = 2 * time.Second
+)
 
 const synopsis = "Sync Kubernetes services and Consul services."
 const help = `
