@@ -474,12 +474,13 @@ func (c *Command) sendSignal(sig os.Signal) {
 
 func defaultLeaderElectionConfiguration() componentbaseconfig.LeaderElectionConfiguration {
 	return componentbaseconfig.LeaderElectionConfiguration{
-		LeaderElect:   false,
-		LeaseDuration: metav1.Duration{Duration: defaultLeaseDuration},
-		RenewDeadline: metav1.Duration{Duration: defaultRenewDeadline},
-		RetryPeriod:   metav1.Duration{Duration: defaultRetryPeriod},
-		ResourceLock:  resourcelock.LeasesResourceLock,
-		ResourceName:  "consul-catalog-sync-lock",
+		LeaderElect:       false,
+		LeaseDuration:     metav1.Duration{Duration: defaultLeaseDuration},
+		RenewDeadline:     metav1.Duration{Duration: defaultRenewDeadline},
+		RetryPeriod:       metav1.Duration{Duration: defaultRetryPeriod},
+		ResourceLock:      resourcelock.LeasesResourceLock,
+		ResourceName:      "consul-sync-catalog",
+		ResourceNamespace: "consul",
 	}
 }
 
