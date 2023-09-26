@@ -312,7 +312,7 @@ func (c *Command) Run(args []string) int {
 			return 1
 		}
 
-		go leaderelection.RunOrDie(ctx, leaderelection.LeaderElectionConfig{
+		leaderelection.RunOrDie(ctx, leaderelection.LeaderElectionConfig{
 			Lock:            lock,
 			ReleaseOnCancel: false,
 			LeaseDuration:   defaultLeaseDuration,
@@ -320,18 +320,18 @@ func (c *Command) Run(args []string) int {
 			RetryPeriod:     defaultRetryPeriod,
 			Callbacks: leaderelection.LeaderCallbacks{
 				OnStartedLeading: func(ctx context.Context) {
-					c.logger.Info("Started leading with unique lease holder id: %s", id)
+					c.logger.Info("Started leading with unique lease holder id", id)
 					go syncer.Run(ctx)
 				},
 				OnStoppedLeading: func() {
-					c.logger.Info("Stopped leading with unique lease holder id: %s", id)
+					c.logger.Info("Stopped leading with unique lease holder id", id)
 				},
 				OnNewLeader: func(identity string) {
 					// Just got the lock
 					if identity == id {
 						return
 					}
-					c.logger.Info("New leader elected with with unique lease holder id: %v", identity)
+					c.logger.Info("New leader elected with with unique lease holder id", identity)
 				},
 			},
 		})
