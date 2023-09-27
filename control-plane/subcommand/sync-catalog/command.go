@@ -322,6 +322,38 @@ func (c *Command) Run(args []string) int {
 				OnStartedLeading: func(ctx context.Context) {
 					c.logger.Info("Started leading with unique lease holder id", id)
 					go syncer.Run(ctx)
+					// Build the controller and start it
+					ctl := &controller.Controller{
+						Log: c.logger.Named("to-consul/controller"),
+						Resource: &catalogtoconsul.ServiceResource{
+							Log:                        c.logger.Named("to-consul/source"),
+							Client:                     c.clientset,
+							Syncer:                     syncer,
+							Ctx:                        ctx,
+							AllowK8sNamespacesSet:      allowSet,
+							DenyK8sNamespacesSet:       denySet,
+							ExplicitEnable:             !c.flagK8SDefault,
+							ClusterIPSync:              c.flagSyncClusterIPServices,
+							LoadBalancerEndpointsSync:  c.flagSyncLBEndpoints,
+							NodePortSync:               catalogtoconsul.NodePortSyncType(c.flagNodePortSyncType),
+							ConsulK8STag:               c.flagConsulK8STag,
+							ConsulServicePrefix:        c.flagConsulServicePrefix,
+							AddK8SNamespaceSuffix:      c.flagAddK8SNamespaceSuffix,
+							EnableNamespaces:           c.flagEnableNamespaces,
+							ConsulDestinationNamespace: c.flagConsulDestinationNamespace,
+							EnableK8SNSMirroring:       c.flagEnableK8SNSMirroring,
+							K8SNSMirroringPrefix:       c.flagK8SNSMirroringPrefix,
+							ConsulNodeName:             c.flagConsulNodeName,
+							EnableIngress:              c.flagEnableIngress,
+							SyncLoadBalancerIPs:        c.flagLoadBalancerIPs,
+						},
+					}
+
+					toConsulCh = make(chan struct{})
+					go func() {
+						defer close(toConsulCh)
+						ctl.Run(ctx.Done())
+					}()
 				},
 				OnStoppedLeading: func() {
 					c.logger.Info("Stopped leading with unique lease holder id", id)
@@ -335,39 +367,6 @@ func (c *Command) Run(args []string) int {
 				},
 			},
 		})
-
-		// Build the controller and start it
-		ctl := &controller.Controller{
-			Log: c.logger.Named("to-consul/controller"),
-			Resource: &catalogtoconsul.ServiceResource{
-				Log:                        c.logger.Named("to-consul/source"),
-				Client:                     c.clientset,
-				Syncer:                     syncer,
-				Ctx:                        ctx,
-				AllowK8sNamespacesSet:      allowSet,
-				DenyK8sNamespacesSet:       denySet,
-				ExplicitEnable:             !c.flagK8SDefault,
-				ClusterIPSync:              c.flagSyncClusterIPServices,
-				LoadBalancerEndpointsSync:  c.flagSyncLBEndpoints,
-				NodePortSync:               catalogtoconsul.NodePortSyncType(c.flagNodePortSyncType),
-				ConsulK8STag:               c.flagConsulK8STag,
-				ConsulServicePrefix:        c.flagConsulServicePrefix,
-				AddK8SNamespaceSuffix:      c.flagAddK8SNamespaceSuffix,
-				EnableNamespaces:           c.flagEnableNamespaces,
-				ConsulDestinationNamespace: c.flagConsulDestinationNamespace,
-				EnableK8SNSMirroring:       c.flagEnableK8SNSMirroring,
-				K8SNSMirroringPrefix:       c.flagK8SNSMirroringPrefix,
-				ConsulNodeName:             c.flagConsulNodeName,
-				EnableIngress:              c.flagEnableIngress,
-				SyncLoadBalancerIPs:        c.flagLoadBalancerIPs,
-			},
-		}
-
-		toConsulCh = make(chan struct{})
-		go func() {
-			defer close(toConsulCh)
-			ctl.Run(ctx.Done())
-		}()
 	}
 
 	// Start Consul-to-K8S sync
