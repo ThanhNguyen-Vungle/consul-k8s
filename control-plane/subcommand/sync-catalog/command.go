@@ -307,8 +307,10 @@ func (c *Command) Run(args []string) int {
 				Identity: id,
 			},
 		)
+
 		if err != nil {
 			c.UI.Error(fmt.Sprintf("Unable to generate lock: %s", err))
+			cancelF()
 			return 1
 		}
 
