@@ -401,9 +401,11 @@ func (c *Command) Run(args []string) int {
 			OnNewLeader: func(identity string) {
 				// Just got the lock
 				if identity == lockID {
+					c.logger.Info("Still same leader", lockID)
 					return
 				}
 				c.logger.Info("New leader elected with with unique lease holder id", identity)
+				c.logger.Info("Old leader lock id", lockID)
 			},
 		},
 	})
