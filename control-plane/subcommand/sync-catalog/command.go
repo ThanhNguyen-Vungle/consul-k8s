@@ -296,7 +296,7 @@ func (c *Command) Run(args []string) int {
 		return 1
 	}
 
-	syncToConsul := func() {
+	syncToConsul := func(ctx context.Context) {
 		// Build the Consul sync and start it
 		syncer := &catalogtoconsul.ConsulSyncer{
 			ConsulClientConfig:      consulConfig,
@@ -344,7 +344,7 @@ func (c *Command) Run(args []string) int {
 		}()
 	}
 
-	syncToK8S := func() {
+	syncToK8S := func(ctx context.Context) {
 		sink := &catalogtok8s.K8SSink{
 			Client:    c.clientset,
 			Namespace: c.flagK8SWriteNamespace,
@@ -387,11 +387,11 @@ func (c *Command) Run(args []string) int {
 				c.logger.Info("Started leading with unique lease holder id", lockID)
 
 				if c.flagToConsul {
-					syncToConsul()
+					syncToConsul(leaderCtx)
 				}
 
 				if c.flagToK8S {
-					syncToK8S()
+					syncToK8S(leaderCtx)
 				}
 
 				// Start healthcheck handler
