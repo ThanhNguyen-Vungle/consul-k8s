@@ -314,7 +314,7 @@ func (c *Command) Run(args []string) int {
 			return 1
 		}
 
-		go leaderelection.RunOrDie(ctx, leaderelection.LeaderElectionConfig{
+		leaderelection.RunOrDie(ctx, leaderelection.LeaderElectionConfig{
 			Lock:            lock,
 			ReleaseOnCancel: false,
 			LeaseDuration:   defaultLeaseDuration,
