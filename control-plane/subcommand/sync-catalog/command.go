@@ -271,7 +271,32 @@ func (c *Command) Run(args []string) int {
 
 	// Start the K8S-to-Consul syncer
 	var toConsulCh chan struct{}
-	if c.flagToConsul {
+
+	// Start Consul-to-K8S sync
+	var toK8SCh chan struct{}
+
+	lockID := generateLockID()
+
+	defaultLEConfig := defaultLeaderElectionConfiguration()
+
+	lock, err := resourcelock.New(
+		defaultLEConfig.ResourceLock,
+		defaultLEConfig.ResourceNamespace,
+		defaultLEConfig.ResourceName,
+		c.clientset.CoreV1(),
+		c.clientset.CoordinationV1(),
+		resourcelock.ResourceLockConfig{
+			Identity: lockID,
+		},
+	)
+
+	if err != nil {
+		c.UI.Error(fmt.Sprintf("Unable to generate lock: %s", err))
+		cancelF()
+		return 1
+	}
+
+	syncToConsul := func() {
 		// Build the Consul sync and start it
 		syncer := &catalogtoconsul.ConsulSyncer{
 			ConsulClientConfig:      consulConfig,
@@ -284,96 +309,42 @@ func (c *Command) Run(args []string) int {
 			ConsulK8STag:            c.flagConsulK8STag,
 			ConsulNodeName:          c.flagConsulNodeName,
 		}
-
-		var id string
-
-		if hostname, err := os.Hostname(); err != nil {
-			// on errors, make sure we're unique
-			id = string(uuid.NewUUID())
-		} else {
-			// add a unique identifier so that two processes on the same host don't accidentally both become active
-			id = hostname + "_" + string(uuid.NewUUID())
+		go syncer.Run(ctx)
+		// Build the controller and start it
+		ctl := &controller.Controller{
+			Log: c.logger.Named("to-consul/controller"),
+			Resource: &catalogtoconsul.ServiceResource{
+				Log:                        c.logger.Named("to-consul/source"),
+				Client:                     c.clientset,
+				Syncer:                     syncer,
+				Ctx:                        ctx,
+				AllowK8sNamespacesSet:      allowSet,
+				DenyK8sNamespacesSet:       denySet,
+				ExplicitEnable:             !c.flagK8SDefault,
+				ClusterIPSync:              c.flagSyncClusterIPServices,
+				LoadBalancerEndpointsSync:  c.flagSyncLBEndpoints,
+				NodePortSync:               catalogtoconsul.NodePortSyncType(c.flagNodePortSyncType),
+				ConsulK8STag:               c.flagConsulK8STag,
+				ConsulServicePrefix:        c.flagConsulServicePrefix,
+				AddK8SNamespaceSuffix:      c.flagAddK8SNamespaceSuffix,
+				EnableNamespaces:           c.flagEnableNamespaces,
+				ConsulDestinationNamespace: c.flagConsulDestinationNamespace,
+				EnableK8SNSMirroring:       c.flagEnableK8SNSMirroring,
+				K8SNSMirroringPrefix:       c.flagK8SNSMirroringPrefix,
+				ConsulNodeName:             c.flagConsulNodeName,
+				EnableIngress:              c.flagEnableIngress,
+				SyncLoadBalancerIPs:        c.flagLoadBalancerIPs,
+			},
 		}
 
-		defaultLEConfig := defaultLeaderElectionConfiguration()
-
-		lock, err := resourcelock.New(
-			defaultLEConfig.ResourceLock,
-			defaultLEConfig.ResourceNamespace,
-			defaultLEConfig.ResourceName,
-			c.clientset.CoreV1(),
-			c.clientset.CoordinationV1(),
-			resourcelock.ResourceLockConfig{
-				Identity: id,
-			},
-		)
-
-		if err != nil {
-			c.UI.Error(fmt.Sprintf("Unable to generate lock: %s", err))
-			cancelF()
-			return 1
-		}
-
-		go leaderelection.RunOrDie(ctx, leaderelection.LeaderElectionConfig{
-			Lock:            lock,
-			ReleaseOnCancel: false,
-			LeaseDuration:   defaultLeaseDuration,
-			RenewDeadline:   defaultRenewDeadline,
-			RetryPeriod:     defaultRetryPeriod,
-			Callbacks: leaderelection.LeaderCallbacks{
-				OnStartedLeading: func(ctx context.Context) {
-					c.logger.Info("Started leading with unique lease holder id", id)
-					go syncer.Run(ctx)
-					// Build the controller and start it
-					ctl := &controller.Controller{
-						Log: c.logger.Named("to-consul/controller"),
-						Resource: &catalogtoconsul.ServiceResource{
-							Log:                        c.logger.Named("to-consul/source"),
-							Client:                     c.clientset,
-							Syncer:                     syncer,
-							Ctx:                        ctx,
-							AllowK8sNamespacesSet:      allowSet,
-							DenyK8sNamespacesSet:       denySet,
-							ExplicitEnable:             !c.flagK8SDefault,
-							ClusterIPSync:              c.flagSyncClusterIPServices,
-							LoadBalancerEndpointsSync:  c.flagSyncLBEndpoints,
-							NodePortSync:               catalogtoconsul.NodePortSyncType(c.flagNodePortSyncType),
-							ConsulK8STag:               c.flagConsulK8STag,
-							ConsulServicePrefix:        c.flagConsulServicePrefix,
-							AddK8SNamespaceSuffix:      c.flagAddK8SNamespaceSuffix,
-							EnableNamespaces:           c.flagEnableNamespaces,
-							ConsulDestinationNamespace: c.flagConsulDestinationNamespace,
-							EnableK8SNSMirroring:       c.flagEnableK8SNSMirroring,
-							K8SNSMirroringPrefix:       c.flagK8SNSMirroringPrefix,
-							ConsulNodeName:             c.flagConsulNodeName,
-							EnableIngress:              c.flagEnableIngress,
-							SyncLoadBalancerIPs:        c.flagLoadBalancerIPs,
-						},
-					}
-
-					toConsulCh = make(chan struct{})
-					go func() {
-						defer close(toConsulCh)
-						ctl.Run(ctx.Done())
-					}()
-				},
-				OnStoppedLeading: func() {
-					c.logger.Info("Stopped leading with unique lease holder id", id)
-				},
-				OnNewLeader: func(identity string) {
-					// Just got the lock
-					if identity == id {
-						return
-					}
-					c.logger.Info("New leader elected with with unique lease holder id", identity)
-				},
-			},
-		})
+		toConsulCh = make(chan struct{})
+		go func() {
+			defer close(toConsulCh)
+			ctl.Run(ctx.Done())
+		}()
 	}
 
-	// Start Consul-to-K8S sync
-	var toK8SCh chan struct{}
-	if c.flagToK8S {
+	syncToK8S := func() {
 		sink := &catalogtok8s.K8SSink{
 			Client:    c.clientset,
 			Namespace: c.flagK8SWriteNamespace,
@@ -405,17 +376,50 @@ func (c *Command) Run(args []string) int {
 		}()
 	}
 
-	// Start healthcheck handler
-	go func() {
-		mux := http.NewServeMux()
-		mux.HandleFunc("/health/ready", c.handleReady)
-		var handler http.Handler = mux
+	leaderelection.RunOrDie(ctx, leaderelection.LeaderElectionConfig{
+		Lock:            lock,
+		ReleaseOnCancel: false,
+		LeaseDuration:   defaultLeaseDuration,
+		RenewDeadline:   defaultRenewDeadline,
+		RetryPeriod:     defaultRetryPeriod,
+		Callbacks: leaderelection.LeaderCallbacks{
+			OnStartedLeading: func(leaderCtx context.Context) {
+				c.logger.Info("Started leading with unique lease holder id", lockID)
 
-		c.UI.Info(fmt.Sprintf("Listening on %q...", c.flagListen))
-		if err := http.ListenAndServe(c.flagListen, handler); err != nil {
-			c.UI.Error(fmt.Sprintf("Error listening: %s", err))
-		}
-	}()
+				if c.flagToConsul {
+					syncToConsul()
+				}
+
+				if c.flagToK8S {
+					syncToK8S()
+				}
+
+				// Start healthcheck handler
+				go func() {
+					mux := http.NewServeMux()
+					mux.HandleFunc("/health/ready", c.handleReady)
+					var handler http.Handler = mux
+
+					c.UI.Info(fmt.Sprintf("Listening on %q...", c.flagListen))
+					if err := http.ListenAndServe(c.flagListen, handler); err != nil {
+						c.UI.Error(fmt.Sprintf("Error listening: %s", err))
+					}
+				}()
+			},
+			OnStoppedLeading: func() {
+				c.logger.Info("Stopped leading with unique lease holder id", lockID)
+			},
+			OnNewLeader: func(identity string) {
+				// Just got the lock
+				if identity == lockID {
+					c.logger.Info("Still same leader", lockID)
+					return
+				}
+				c.logger.Info("New leader elected with with unique lease holder id", identity)
+				c.logger.Info("Old leader lock id", lockID)
+			},
+		},
+	})
 
 	select {
 	// Unexpected exit
@@ -471,6 +475,32 @@ func (c *Command) interrupt() {
 
 func (c *Command) sendSignal(sig os.Signal) {
 	c.sigCh <- sig
+}
+
+func (c *Command) generateLock(id string) (resourcelock.Interface, error) {
+
+	defaultLEConfig := defaultLeaderElectionConfiguration()
+
+	return resourcelock.New(
+		defaultLEConfig.ResourceLock,
+		defaultLEConfig.ResourceNamespace,
+		defaultLEConfig.ResourceName,
+		c.clientset.CoreV1(),
+		c.clientset.CoordinationV1(),
+		resourcelock.ResourceLockConfig{
+			Identity: id,
+		},
+	)
+}
+
+func generateLockID() string {
+	if hostname, err := os.Hostname(); err != nil {
+		// on errors, make sure we're unique
+		return string(uuid.NewUUID())
+	} else {
+		// add a unique identifier so that two processes on the same host don't accidentally both become active
+		return hostname + "_" + string(uuid.NewUUID())
+	}
 }
 
 func defaultLeaderElectionConfiguration() componentbaseconfig.LeaderElectionConfiguration {
