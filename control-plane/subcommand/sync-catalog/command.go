@@ -275,7 +275,9 @@ func (c *Command) Run(args []string) int {
 	// Start Consul-to-K8S sync
 	var toK8SCh chan struct{}
 
-	lock, err := c.generateLock()
+	lockID := generateLockID()
+
+	lock, err := c.generateLock(lockID)
 
 	if err != nil {
 		c.UI.Error(fmt.Sprintf("Unable to generate lock: %s", err))
@@ -371,7 +373,7 @@ func (c *Command) Run(args []string) int {
 		RetryPeriod:     defaultRetryPeriod,
 		Callbacks: leaderelection.LeaderCallbacks{
 			OnStartedLeading: func(ctx context.Context) {
-				c.logger.Info("Started leading with unique lease holder id", id)
+				c.logger.Info("Started leading with unique lease holder id", lockID)
 
 				if c.flagToConsul {
 					syncToConsul()
@@ -382,11 +384,11 @@ func (c *Command) Run(args []string) int {
 				}
 			},
 			OnStoppedLeading: func() {
-				c.logger.Info("Stopped leading with unique lease holder id", id)
+				c.logger.Info("Stopped leading with unique lease holder id", lockID)
 			},
 			OnNewLeader: func(identity string) {
 				// Just got the lock
-				if identity == id {
+				if identity == lockID {
 					return
 				}
 				c.logger.Info("New leader elected with with unique lease holder id", identity)
@@ -462,16 +464,7 @@ func (c *Command) sendSignal(sig os.Signal) {
 	c.sigCh <- sig
 }
 
-func (c *Command) generateLock() (resourcelock.Interface, error) {
-	var id string
-
-	if hostname, err := os.Hostname(); err != nil {
-		// on errors, make sure we're unique
-		id = string(uuid.NewUUID())
-	} else {
-		// add a unique identifier so that two processes on the same host don't accidentally both become active
-		id = hostname + "_" + string(uuid.NewUUID())
-	}
+func (c *Command) generateLock(id string) (resourcelock.Interface, error) {
 
 	defaultLEConfig := defaultLeaderElectionConfiguration()
 
@@ -485,6 +478,16 @@ func (c *Command) generateLock() (resourcelock.Interface, error) {
 			Identity: id,
 		},
 	)
+}
+
+func generateLockID() string {
+	if hostname, err := os.Hostname(); err != nil {
+		// on errors, make sure we're unique
+		return string(uuid.NewUUID())
+	} else {
+		// add a unique identifier so that two processes on the same host don't accidentally both become active
+		return hostname + "_" + string(uuid.NewUUID())
+	}
 }
 
 func defaultLeaderElectionConfiguration() componentbaseconfig.LeaderElectionConfiguration {
