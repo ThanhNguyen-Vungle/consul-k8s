@@ -7,7 +7,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	catalogtok8s "github.com/hashicorp/consul-k8s/control-plane/catalog/to-k8s"
 	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/client-go/tools/leaderelection"
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
@@ -29,6 +28,7 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
 
 	catalogtoconsul "github.com/hashicorp/consul-k8s/control-plane/catalog/to-consul"
+	catalogtok8s "github.com/hashicorp/consul-k8s/control-plane/catalog/to-k8s"
 	"github.com/hashicorp/consul-k8s/control-plane/consul"
 	"github.com/hashicorp/consul-k8s/control-plane/helper/controller"
 	"github.com/hashicorp/consul-k8s/control-plane/subcommand"
@@ -296,80 +296,55 @@ func (c *Command) Run(args []string) int {
 		return 1
 	}
 
-	go leaderelection.RunOrDie(ctx, leaderelection.LeaderElectionConfig{
-		Lock:            lock,
-		ReleaseOnCancel: false,
-		LeaseDuration:   defaultLeaseDuration,
-		RenewDeadline:   defaultRenewDeadline,
-		RetryPeriod:     defaultRetryPeriod,
-		Callbacks: leaderelection.LeaderCallbacks{
-			OnStartedLeading: func(ctx context.Context) {
-				c.logger.Info("Started leading with unique lease holder id", lockID)
-
-				if c.flagToConsul {
-					// Build the Consul sync and start it
-					syncer := &catalogtoconsul.ConsulSyncer{
-						ConsulClientConfig:      consulConfig,
-						ConsulServerConnMgr:     c.connMgr,
-						Log:                     c.logger.Named("to-consul/sink"),
-						EnableNamespaces:        c.flagEnableNamespaces,
-						CrossNamespaceACLPolicy: c.flagCrossNamespaceACLPolicy,
-						SyncPeriod:              c.flagConsulWritePeriod,
-						ServicePollPeriod:       c.flagConsulWritePeriod * 2,
-						ConsulK8STag:            c.flagConsulK8STag,
-						ConsulNodeName:          c.flagConsulNodeName,
-					}
-					go syncer.Run(ctx)
-					// Build the controller and start it
-					ctl := &controller.Controller{
-						Log: c.logger.Named("to-consul/controller"),
-						Resource: &catalogtoconsul.ServiceResource{
-							Log:                        c.logger.Named("to-consul/source"),
-							Client:                     c.clientset,
-							Syncer:                     syncer,
-							Ctx:                        ctx,
-							AllowK8sNamespacesSet:      allowSet,
-							DenyK8sNamespacesSet:       denySet,
-							ExplicitEnable:             !c.flagK8SDefault,
-							ClusterIPSync:              c.flagSyncClusterIPServices,
-							LoadBalancerEndpointsSync:  c.flagSyncLBEndpoints,
-							NodePortSync:               catalogtoconsul.NodePortSyncType(c.flagNodePortSyncType),
-							ConsulK8STag:               c.flagConsulK8STag,
-							ConsulServicePrefix:        c.flagConsulServicePrefix,
-							AddK8SNamespaceSuffix:      c.flagAddK8SNamespaceSuffix,
-							EnableNamespaces:           c.flagEnableNamespaces,
-							ConsulDestinationNamespace: c.flagConsulDestinationNamespace,
-							EnableK8SNSMirroring:       c.flagEnableK8SNSMirroring,
-							K8SNSMirroringPrefix:       c.flagK8SNSMirroringPrefix,
-							ConsulNodeName:             c.flagConsulNodeName,
-							EnableIngress:              c.flagEnableIngress,
-							SyncLoadBalancerIPs:        c.flagLoadBalancerIPs,
-						},
-					}
-
-					toConsulCh = make(chan struct{})
-					go func() {
-						defer close(toConsulCh)
-						ctl.Run(ctx.Done())
-					}()
-				}
+	syncToConsul := func(ctx context.Context) {
+		// Build the Consul sync and start it
+		syncer := &catalogtoconsul.ConsulSyncer{
+			ConsulClientConfig:      consulConfig,
+			ConsulServerConnMgr:     c.connMgr,
+			Log:                     c.logger.Named("to-consul/sink"),
+			EnableNamespaces:        c.flagEnableNamespaces,
+			CrossNamespaceACLPolicy: c.flagCrossNamespaceACLPolicy,
+			SyncPeriod:              c.flagConsulWritePeriod,
+			ServicePollPeriod:       c.flagConsulWritePeriod * 2,
+			ConsulK8STag:            c.flagConsulK8STag,
+			ConsulNodeName:          c.flagConsulNodeName,
+		}
+		go syncer.Run(ctx)
+		// Build the controller and start it
+		ctl := &controller.Controller{
+			Log: c.logger.Named("to-consul/controller"),
+			Resource: &catalogtoconsul.ServiceResource{
+				Log:                        c.logger.Named("to-consul/source"),
+				Client:                     c.clientset,
+				Syncer:                     syncer,
+				Ctx:                        ctx,
+				AllowK8sNamespacesSet:      allowSet,
+				DenyK8sNamespacesSet:       denySet,
+				ExplicitEnable:             !c.flagK8SDefault,
+				ClusterIPSync:              c.flagSyncClusterIPServices,
+				LoadBalancerEndpointsSync:  c.flagSyncLBEndpoints,
+				NodePortSync:               catalogtoconsul.NodePortSyncType(c.flagNodePortSyncType),
+				ConsulK8STag:               c.flagConsulK8STag,
+				ConsulServicePrefix:        c.flagConsulServicePrefix,
+				AddK8SNamespaceSuffix:      c.flagAddK8SNamespaceSuffix,
+				EnableNamespaces:           c.flagEnableNamespaces,
+				ConsulDestinationNamespace: c.flagConsulDestinationNamespace,
+				EnableK8SNSMirroring:       c.flagEnableK8SNSMirroring,
+				K8SNSMirroringPrefix:       c.flagK8SNSMirroringPrefix,
+				ConsulNodeName:             c.flagConsulNodeName,
+				EnableIngress:              c.flagEnableIngress,
+				SyncLoadBalancerIPs:        c.flagLoadBalancerIPs,
 			},
-			OnStoppedLeading: func() {
-				c.logger.Info("Stopped leading with unique lease holder id", lockID)
-			},
-			OnNewLeader: func(identity string) {
-				// Just got the lock
-				if identity == lockID {
-					c.logger.Info("Still same leader", lockID)
-					return
-				}
-				c.logger.Info("New leader elected with with unique lease holder id", identity)
-				c.logger.Info("Old leader lock id", lockID)
-			},
-		},
-	})
+		}
 
-	if c.flagToK8S {
+		toConsulCh = make(chan struct{})
+		go func() {
+			defer close(toConsulCh)
+			ctl.Run(ctx.Done())
+		}()
+	}
+
+	syncToK8S := func(ctx context.Context) {
 		sink := &catalogtok8s.K8SSink{
 			Client:    c.clientset,
 			Namespace: c.flagK8SWriteNamespace,
@@ -400,6 +375,39 @@ func (c *Command) Run(args []string) int {
 			ctl.Run(ctx.Done())
 		}()
 	}
+
+	go leaderelection.RunOrDie(ctx, leaderelection.LeaderElectionConfig{
+		Lock:            lock,
+		ReleaseOnCancel: false,
+		LeaseDuration:   defaultLeaseDuration,
+		RenewDeadline:   defaultRenewDeadline,
+		RetryPeriod:     defaultRetryPeriod,
+		Callbacks: leaderelection.LeaderCallbacks{
+			OnStartedLeading: func(leaderCtx context.Context) {
+				c.logger.Info("Started leading with unique lease holder id", lockID)
+
+				if c.flagToConsul {
+					syncToConsul(leaderCtx)
+				}
+
+				if c.flagToK8S {
+					syncToK8S(leaderCtx)
+				}
+			},
+			OnStoppedLeading: func() {
+				c.logger.Info("Stopped leading with unique lease holder id", lockID)
+			},
+			OnNewLeader: func(identity string) {
+				// Just got the lock
+				if identity == lockID {
+					c.logger.Info("Still same leader", lockID)
+					return
+				}
+				c.logger.Info("New leader elected with with unique lease holder id", identity)
+				c.logger.Info("Old leader lock id", lockID)
+			},
+		},
+	})
 
 	// Start healthcheck handler
 	go func() {
