@@ -277,7 +277,18 @@ func (c *Command) Run(args []string) int {
 
 	lockID := generateLockID()
 
-	lock, err := c.generateLock(lockID)
+	defaultLEConfig := defaultLeaderElectionConfiguration()
+
+	lock, err := resourcelock.New(
+		defaultLEConfig.ResourceLock,
+		defaultLEConfig.ResourceNamespace,
+		defaultLEConfig.ResourceName,
+		c.clientset.CoreV1(),
+		c.clientset.CoordinationV1(),
+		resourcelock.ResourceLockConfig{
+			Identity: lockID,
+		},
+	)
 
 	if err != nil {
 		c.UI.Error(fmt.Sprintf("Unable to generate lock: %s", err))
@@ -372,7 +383,7 @@ func (c *Command) Run(args []string) int {
 		RenewDeadline:   defaultRenewDeadline,
 		RetryPeriod:     defaultRetryPeriod,
 		Callbacks: leaderelection.LeaderCallbacks{
-			OnStartedLeading: func(ctx context.Context) {
+			OnStartedLeading: func(leaderCtx context.Context) {
 				c.logger.Info("Started leading with unique lease holder id", lockID)
 
 				if c.flagToConsul {

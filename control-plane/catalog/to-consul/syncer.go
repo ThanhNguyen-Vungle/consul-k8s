@@ -394,7 +394,6 @@ func (s *ConsulSyncer) syncFull(ctx context.Context) {
 	}
 
 	s.Log.Info("registering services")
-	s.Log.Info("debugging - 180923")
 
 	// Update the service watchers
 	for ns, watchers := range s.watchers {
