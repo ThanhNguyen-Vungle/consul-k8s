@@ -353,18 +353,6 @@ func (c *Command) Run(args []string) int {
 						ctl.Run(ctx.Done())
 					}()
 				}
-
-				// Start healthcheck handler
-				go func() {
-					mux := http.NewServeMux()
-					mux.HandleFunc("/health/ready", c.handleReady)
-					var handler http.Handler = mux
-
-					c.UI.Info(fmt.Sprintf("Listening on %q...", c.flagListen))
-					if err := http.ListenAndServe(c.flagListen, handler); err != nil {
-						c.UI.Error(fmt.Sprintf("Error listening: %s", err))
-					}
-				}()
 			},
 			OnStoppedLeading: func() {
 				c.logger.Info("Stopped leading with unique lease holder id", lockID)
@@ -412,6 +400,18 @@ func (c *Command) Run(args []string) int {
 			ctl.Run(ctx.Done())
 		}()
 	}
+
+	// Start healthcheck handler
+	go func() {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/health/ready", c.handleReady)
+		var handler http.Handler = mux
+
+		c.UI.Info(fmt.Sprintf("Listening on %q...", c.flagListen))
+		if err := http.ListenAndServe(c.flagListen, handler); err != nil {
+			c.UI.Error(fmt.Sprintf("Error listening: %s", err))
+		}
+	}()
 
 	select {
 	// Unexpected exit
