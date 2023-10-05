@@ -296,7 +296,7 @@ func (c *Command) Run(args []string) int {
 		return 1
 	}
 
-	syncToConsul := func() {
+	syncToConsul := func(leaderCtx context.Context) {
 		// Build the Consul sync and start it
 		syncer := &catalogtoconsul.ConsulSyncer{
 			ConsulClientConfig:      consulConfig,
@@ -309,7 +309,7 @@ func (c *Command) Run(args []string) int {
 			ConsulK8STag:            c.flagConsulK8STag,
 			ConsulNodeName:          c.flagConsulNodeName,
 		}
-		go syncer.Run(ctx)
+		go syncer.Run(leaderCtx)
 		// Build the controller and start it
 		ctl := &controller.Controller{
 			Log: c.logger.Named("to-consul/controller"),
@@ -317,7 +317,7 @@ func (c *Command) Run(args []string) int {
 				Log:                        c.logger.Named("to-consul/source"),
 				Client:                     c.clientset,
 				Syncer:                     syncer,
-				Ctx:                        ctx,
+				Ctx:                        leaderCtx,
 				AllowK8sNamespacesSet:      allowSet,
 				DenyK8sNamespacesSet:       denySet,
 				ExplicitEnable:             !c.flagK8SDefault,
@@ -340,16 +340,16 @@ func (c *Command) Run(args []string) int {
 		toConsulCh = make(chan struct{})
 		go func() {
 			defer close(toConsulCh)
-			ctl.Run(ctx.Done())
+			ctl.Run(leaderCtx.Done())
 		}()
 	}
 
-	syncToK8S := func() {
+	syncToK8S := func(leaderCtx context.Context) {
 		sink := &catalogtok8s.K8SSink{
 			Client:    c.clientset,
 			Namespace: c.flagK8SWriteNamespace,
 			Log:       c.logger.Named("to-k8s/sink"),
-			Ctx:       ctx,
+			Ctx:       leaderCtx,
 		}
 
 		source := &catalogtok8s.Source{
@@ -361,7 +361,7 @@ func (c *Command) Run(args []string) int {
 			Log:                 c.logger.Named("to-k8s/source"),
 			ConsulK8STag:        c.flagConsulK8STag,
 		}
-		go source.Run(ctx)
+		go source.Run(leaderCtx)
 
 		// Build the controller and start it
 		ctl := &controller.Controller{
@@ -372,7 +372,7 @@ func (c *Command) Run(args []string) int {
 		toK8SCh = make(chan struct{})
 		go func() {
 			defer close(toK8SCh)
-			ctl.Run(ctx.Done())
+			ctl.Run(leaderCtx.Done())
 		}()
 	}
 
@@ -387,11 +387,11 @@ func (c *Command) Run(args []string) int {
 				c.logger.Info("Started leading with unique lease holder id", lockID)
 
 				if c.flagToConsul {
-					syncToConsul()
+					syncToConsul(leaderCtx)
 				}
 
 				if c.flagToK8S {
-					syncToK8S()
+					syncToK8S(leaderCtx)
 				}
 
 				// Start healthcheck handler
