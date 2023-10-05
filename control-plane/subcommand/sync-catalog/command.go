@@ -7,6 +7,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	catalogtok8s "github.com/hashicorp/consul-k8s/control-plane/catalog/to-k8s"
 	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/client-go/tools/leaderelection"
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
@@ -28,7 +29,6 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
 
 	catalogtoconsul "github.com/hashicorp/consul-k8s/control-plane/catalog/to-consul"
-	catalogtok8s "github.com/hashicorp/consul-k8s/control-plane/catalog/to-k8s"
 	"github.com/hashicorp/consul-k8s/control-plane/consul"
 	"github.com/hashicorp/consul-k8s/control-plane/helper/controller"
 	"github.com/hashicorp/consul-k8s/control-plane/subcommand"
@@ -324,20 +324,20 @@ func (c *Command) Run(args []string) int {
 					ctl := &controller.Controller{
 						Log: c.logger.Named("to-consul/controller"),
 						Resource: &catalogtoconsul.ServiceResource{
-							Log:                       c.logger.Named("to-consul/source"),
-							Client:                    c.clientset,
-							Syncer:                    syncer,
-							Ctx:                       ctx,
-							AllowK8sNamespacesSet:     allowSet,
-							DenyK8sNamespacesSet:      denySet,
-							ExplicitEnable:            !c.flagK8SDefault,
-							ClusterIPSync:             c.flagSyncClusterIPServices,
-							LoadBalancerEndpointsSync: c.flagSyncLBEndpoints,
-							NodePortSync:              catalogtoconsul.NodePortSyncType(c.flagNodePortSyncType),
-							ConsulK8STag:              c.flagConsulK8STag,
-							ConsulServicePrefix:       c.flagConsulServicePrefix,
-							AddK8SNamespaceSuffix:     c.flagAddK8SNamespaceSuffix,
-							EnableNamespaces:          c.flagEnableNamespaces,
+							Log:                        c.logger.Named("to-consul/source"),
+							Client:                     c.clientset,
+							Syncer:                     syncer,
+							Ctx:                        ctx,
+							AllowK8sNamespacesSet:      allowSet,
+							DenyK8sNamespacesSet:       denySet,
+							ExplicitEnable:             !c.flagK8SDefault,
+							ClusterIPSync:              c.flagSyncClusterIPServices,
+							LoadBalancerEndpointsSync:  c.flagSyncLBEndpoints,
+							NodePortSync:               catalogtoconsul.NodePortSyncType(c.flagNodePortSyncType),
+							ConsulK8STag:               c.flagConsulK8STag,
+							ConsulServicePrefix:        c.flagConsulServicePrefix,
+							AddK8SNamespaceSuffix:      c.flagAddK8SNamespaceSuffix,
+							EnableNamespaces:           c.flagEnableNamespaces,
 							ConsulDestinationNamespace: c.flagConsulDestinationNamespace,
 							EnableK8SNSMirroring:       c.flagEnableK8SNSMirroring,
 							K8SNSMirroringPrefix:       c.flagK8SNSMirroringPrefix,
@@ -350,38 +350,6 @@ func (c *Command) Run(args []string) int {
 					toConsulCh = make(chan struct{})
 					go func() {
 						defer close(toConsulCh)
-						ctl.Run(ctx.Done())
-					}()
-				}
-
-				if c.flagToK8S {
-					sink := &catalogtok8s.K8SSink{
-						Client:    c.clientset,
-						Namespace: c.flagK8SWriteNamespace,
-						Log:       c.logger.Named("to-k8s/sink"),
-						Ctx:       ctx,
-					}
-
-					source := &catalogtok8s.Source{
-						ConsulClientConfig:  consulConfig,
-						ConsulServerConnMgr: c.connMgr,
-						Domain:              c.flagConsulDomain,
-						Sink:                sink,
-						Prefix:              c.flagK8SServicePrefix,
-						Log:                 c.logger.Named("to-k8s/source"),
-						ConsulK8STag:        c.flagConsulK8STag,
-					}
-					go source.Run(ctx)
-
-					// Build the controller and start it
-					ctl := &controller.Controller{
-						Log:      c.logger.Named("to-k8s/controller"),
-						Resource: sink,
-					}
-
-					toK8SCh = make(chan struct{})
-					go func() {
-						defer close(toK8SCh)
 						ctl.Run(ctx.Done())
 					}()
 				}
@@ -412,6 +380,38 @@ func (c *Command) Run(args []string) int {
 			},
 		},
 	})
+
+	if c.flagToK8S {
+		sink := &catalogtok8s.K8SSink{
+			Client:    c.clientset,
+			Namespace: c.flagK8SWriteNamespace,
+			Log:       c.logger.Named("to-k8s/sink"),
+			Ctx:       ctx,
+		}
+
+		source := &catalogtok8s.Source{
+			ConsulClientConfig:  consulConfig,
+			ConsulServerConnMgr: c.connMgr,
+			Domain:              c.flagConsulDomain,
+			Sink:                sink,
+			Prefix:              c.flagK8SServicePrefix,
+			Log:                 c.logger.Named("to-k8s/source"),
+			ConsulK8STag:        c.flagConsulK8STag,
+		}
+		go source.Run(ctx)
+
+		// Build the controller and start it
+		ctl := &controller.Controller{
+			Log:      c.logger.Named("to-k8s/controller"),
+			Resource: sink,
+		}
+
+		toK8SCh = make(chan struct{})
+		go func() {
+			defer close(toK8SCh)
+			ctl.Run(ctx.Done())
+		}()
+	}
 
 	select {
 	// Unexpected exit
